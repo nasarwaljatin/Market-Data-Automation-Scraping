@@ -4,7 +4,7 @@ pipeline/run_pipeline.py
 Full pipeline orchestrator.
 
 Runs all stages in sequence:
-  1. Fetch   — NSE, Yahoo Finance, Google Finance
+  1. Fetch   — NSE, Yahoo Finance, Google Finance  (OR offline synthetic data)
   2. Standardize — schema alignment + IST timezone normalization
   3. Resolve conflicts — priority-weighted cross-source resolution
   4. Preprocess — missing values, outliers, corporate actions
@@ -12,9 +12,10 @@ Runs all stages in sequence:
   6. Save outputs to data/processed/
 
 Usage:
-    python pipeline/run_pipeline.py
+    python pipeline/run_pipeline.py                         # online mode
+    python pipeline/run_pipeline.py --offline               # offline/demo mode
     python pipeline/run_pipeline.py --symbols RELIANCE.NS TCS.NS --start 2023-01-01 --end 2024-01-01
-    python pipeline/run_pipeline.py --skip-fetch   (if raw data already exists)
+    python pipeline/run_pipeline.py --skip-fetch            # use existing raw files
 """
 
 import argparse
@@ -32,16 +33,16 @@ log = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Stage 1: Data ingestion
+# Stage 1a: Online data ingestion
 # ──────────────────────────────────────────────────────────────────────────────
 
 def stage_fetch(symbols: list, nse_symbols: list, start: str, end: str) -> None:
-    """Fetch raw data from all three sources for all symbols."""
-    from scrapers.nse_scraper   import save_nse_data
-    from scrapers.yahoo_fetcher import save_yahoo_data
+    """Fetch raw data from all three sources for all symbols (requires internet)."""
+    from scrapers.nse_scraper    import save_nse_data
+    from scrapers.yahoo_fetcher  import save_yahoo_data
     from scrapers.google_fetcher import save_google_data
 
-    log.info("── Stage 1: Data Ingestion ──────────────────────────────────")
+    log.info("── Stage 1: Data Ingestion (ONLINE) ─────────────────────────")
 
     for nse_sym, yahoo_sym in zip(nse_symbols, symbols):
         log.info(f"  Fetching NSE:    {nse_sym}")
@@ -63,6 +64,20 @@ def stage_fetch(symbols: list, nse_symbols: list, start: str, end: str) -> None:
             log.error(f"  Google fetch failed for {nse_sym}: {exc}")
 
         time.sleep(1)   # polite delay between symbols
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage 1b: Offline synthetic data generation
+# ──────────────────────────────────────────────────────────────────────────────
+
+def stage_fetch_offline(symbols: list, start: str, end: str) -> None:
+    """Generate synthetic GBM market data (no internet required)."""
+    from pipeline.offline_mode import save_offline_data
+
+    log.info("── Stage 1: Data Generation (OFFLINE / DEMO MODE) ───────────")
+    log.info("   Using Geometric Brownian Motion to simulate realistic OHLCV data.")
+    save_offline_data(symbols, start, end)
+    log.info("   Offline data ready in data/raw/")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -124,6 +139,7 @@ def run_pipeline(
     start: str = START_DATE,
     end: str = END_DATE,
     skip_fetch: bool = False,
+    offline: bool = False,
 ) -> dict:
     """
     Execute the full market data pipeline.
@@ -134,6 +150,7 @@ def run_pipeline(
     start      : str   — 'YYYY-MM-DD'
     end        : str   — 'YYYY-MM-DD'
     skip_fetch : bool  — if True, skip data ingestion (use existing raw files)
+    offline    : bool  — if True, use synthetic GBM data (no internet needed)
 
     Returns
     -------
@@ -144,9 +161,11 @@ def run_pipeline(
 
     nse_symbols = [s.replace(".NS", "") for s in symbols]
 
+    mode_label = "OFFLINE (synthetic GBM)" if offline else "ONLINE (live sources)"
     log.info("=" * 65)
     log.info("  Market Data Automation Pipeline")
-    log.info(f"  Symbols  : {', '.join(symbols)}")
+    log.info(f"  Mode      : {mode_label}")
+    log.info(f"  Symbols   : {', '.join(symbols)}")
     log.info(f"  Date range: {start} → {end}")
     log.info(f"  Skip fetch: {skip_fetch}")
     log.info("=" * 65)
@@ -154,10 +173,12 @@ def run_pipeline(
     t0 = time.time()
 
     # ── Stage 1 ───────────────────────────────────────────────────
-    if not skip_fetch:
-        stage_fetch(symbols, nse_symbols, start, end)
-    else:
+    if skip_fetch:
         log.info("── Stage 1: Skipped (--skip-fetch) ──────────────────────────")
+    elif offline:
+        stage_fetch_offline(symbols, start, end)
+    else:
+        stage_fetch(symbols, nse_symbols, start, end)
 
     # ── Stage 2 ───────────────────────────────────────────────────
     stage_standardize(symbols)
@@ -202,6 +223,8 @@ Examples:
     parser.add_argument("--start",      default=START_DATE, help="Start date YYYY-MM-DD")
     parser.add_argument("--end",        default=END_DATE,   help="End date   YYYY-MM-DD")
     parser.add_argument("--skip-fetch", action="store_true", help="Skip data ingestion stage")
+    parser.add_argument("--offline",    action="store_true",
+                        help="Run in offline mode using synthetic GBM data (no internet needed)")
     args = parser.parse_args()
 
     results = run_pipeline(
@@ -209,6 +232,7 @@ Examples:
         start=args.start,
         end=args.end,
         skip_fetch=args.skip_fetch,
+        offline=args.offline,
     )
 
     print("\n── Pipeline Summary ──────────────────────────────────────────")
